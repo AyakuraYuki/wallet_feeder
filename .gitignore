@@ -1,0 +1,18 @@
+# Go caches used by this checkout's sandboxed development flow
+.gomodcache/
+.gocache/
+
+# IDE
+.idea/
+
+# Built app and local development data
+/walletfeeder
+.mygo/
+build/
+dist/
+.devdata/
+artifacts/
+walletfeeder.db
+walletfeeder.db-*
+*.log
+.DS_Store
