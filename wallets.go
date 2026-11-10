@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -15,7 +16,11 @@ func (a *App) walletsPage(c *ui.Context) {
 				ui.Text(c, "每只钱包都有自己的小胃口，余额永远由流水算出来。").FontSize(11).TextColor(p.muted)
 			})
 			ui.Spacer(c)
-			if ui.PrimaryButton(c, "添加钱包").Label("添加钱包").Height(34).Clicked() {
+			add := ui.PrimaryButton(c, "添加钱包").Label("添加钱包").Height(34)
+			if a.useGlass {
+				add.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+			}
+			if add.Clicked() {
 				a.openAddWallet()
 			}
 		})
@@ -23,12 +28,16 @@ func (a *App) walletsPage(c *ui.Context) {
 		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
 			if len(a.snap.Wallets) == 0 {
 				ui.Column(c).Grow(1).Center().Children(func() {
-					ui.Column(c).Width(420).Padding(28).Center().Gap(10).Radius(20).
-						Background(p.surfaceAlt).Border(1, p.border).Children(func() {
+					empty := a.panelAlt(c, ui.Column(c).Width(420).Padding(28).Center().Gap(10), 20)
+					empty.Children(func() {
 						ui.Text(c, "一只钱包都没有").FontSize(17).FontWeight(700).TextColor(p.text)
 						ui.Text(c, "先把要记账的钱包请进来，再开始投喂。").FontSize(11).TextColor(p.muted).
 							TextAlign(ui.Center)
-						if ui.PrimaryButton(c, "添加钱包").Label("添加第一只钱包").Clicked() {
+						add := ui.PrimaryButton(c, "添加钱包").Label("添加第一只钱包")
+						if a.useGlass {
+							add.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+						}
+						if add.Clicked() {
 							a.openAddWallet()
 						}
 					})
@@ -56,14 +65,24 @@ func (a *App) walletManageCard(c *ui.Context, w Wallet) {
 	mood := MoodFor(w.BalanceCents, a.snap.BudgetCents)
 	count := a.snap.WalletEntryCount[w.ID]
 
-	card := ui.Column(c).Padding(14, 15).Gap(11).Radius(18).
-		Background(p.surface).Border(1, p.border).Transition(ui.ElementTransition{Colors: true})
+	card := a.panel(c, ui.Column(c).Padding(14, 15).Gap(11), 18).
+		Transition(ui.ElementTransition{Colors: true})
 	if selected {
-		card.Border(1, alpha(p.accent, 0.55)).Background(p.surface.Mix(p.accentSoft, 0.45))
+		if a.useGlass {
+			card.Border(1, alpha(p.accent, .75))
+		} else {
+			card.Border(1, alpha(p.accent, 0.55)).Background(p.surface.Mix(p.accentSoft, 0.45))
+		}
 	}
 	card.Children(func() {
 		ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(38, 38).Radius(12).Background(p.surfaceAlt).Children(func() {
+			icon := ui.Box(c).Size(38, 38).Radius(12)
+			if a.useGlass {
+				icon.Material(glass.Glass{Clarity: .5}).Border(1, ui.RGBA(255, 255, 255, .3))
+			} else {
+				icon.Background(p.surfaceAlt)
+			}
+			icon.Children(func() {
 				ui.Text(c, "👛").FontSize(18).Center()
 			})
 			ui.Column(c).Grow(1).Gap(1).Children(func() {
@@ -84,6 +103,9 @@ func (a *App) walletManageCard(c *ui.Context, w Wallet) {
 					tagColor = p.coral
 					tagBG = p.coralSoft
 				}
+				if a.useGlass {
+					tagBG = alpha(p.surface, .22)
+				}
 				ui.Text(c, WalletLabel(w.BalanceCents, a.snap.BudgetCents)).
 					FontSize(9).FontWeight(600).TextColor(tagColor).
 					Padding(2, 7).Radius(999).Background(tagBG)
@@ -95,20 +117,20 @@ func (a *App) walletManageCard(c *ui.Context, w Wallet) {
 				ui.Text(c, "录入默认").FontSize(9).FontWeight(600).TextColor(p.accent).
 					Padding(2, 7).Radius(999).Background(p.accentSoft)
 			} else {
-				if smallTextButton(c, "设为默认", "设为默认："+w.Name, p).Clicked() {
+				if a.smallTextButton(c, "设为默认", "设为默认："+w.Name, p).Clicked() {
 					a.form.walletID = w.ID
 					a.hint = ""
 					a.toast = fmt.Sprintf("「%s」成了录入默认钱包", w.Name)
 				}
 			}
 			ui.Spacer(c)
-			if smallTextButton(c, "校准", "校准余额："+w.Name, p).Clicked() {
+			if a.smallTextButton(c, "校准", "校准余额："+w.Name, p).Clicked() {
 				a.openCalibrateWallet(w)
 			}
-			if smallTextButton(c, "改名", "重命名："+w.Name, p).Clicked() {
+			if a.smallTextButton(c, "改名", "重命名："+w.Name, p).Clicked() {
 				a.openRenameWallet(w)
 			}
-			del := smallTextButtonColor(c, "删除", "删除钱包："+w.Name, p, p.coral)
+			del := a.smallTextButtonColor(c, "删除", "删除钱包："+w.Name, p, p.coral)
 			if del.Clicked() {
 				a.askDeleteWallet(w.ID)
 			}
@@ -116,17 +138,21 @@ func (a *App) walletManageCard(c *ui.Context, w Wallet) {
 	})
 }
 
-func smallTextButton(c *ui.Context, label, accessibilityLabel string, p look) ui.Element {
-	return smallTextButtonColor(c, label, accessibilityLabel, p, p.muted)
+func (a *App) smallTextButton(c *ui.Context, label, accessibilityLabel string, p look) ui.Element {
+	return a.smallTextButtonColor(c, label, accessibilityLabel, p, p.muted)
 }
 
-func smallTextButtonColor(c *ui.Context, label, accessibilityLabel string, p look, color ui.Color) ui.Element {
+func (a *App) smallTextButtonColor(c *ui.Context, label, accessibilityLabel string, p look, color ui.Color) ui.Element {
 	b := ui.ButtonBase(c).Padding(4, 8).Radius(7).Label(accessibilityLabel).Tooltip(accessibilityLabel)
 	b.Children(func() {
 		ui.Text(c, label).FontSize(10).FontWeight(500).TextColor(color)
 	})
 	if b.Hovered() {
-		b.Background(p.surfaceAlt)
+		if a.useGlass {
+			b.Background(alpha(p.surface, .18))
+		} else {
+			b.Background(p.surfaceAlt)
+		}
 	}
 	return b
 }
@@ -136,53 +162,57 @@ func (a *App) walletsAside(c *ui.Context) {
 	used := usedPercent(a.snap.CurrentStats.ExpenseCents, a.snap.BudgetCents)
 	remain := a.snap.BudgetCents - a.snap.CurrentStats.ExpenseCents
 	ui.Column(c).Width(296).Shrink(0).Gap(12).Children(func() {
-		ui.Column(c).Padding(16, 17).Gap(9).Radius(18).Background(p.surface).Border(1, p.border).
-			Children(func() {
-				ui.Row(c).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "月预算").FontSize(12).FontWeight(700).TextColor(p.text)
-					ui.Spacer(c)
-					ui.Text(c, monthLabelCN(a.currentMonth())).FontSize(9.5).TextColor(p.muted)
-				})
-				ui.Text(c, FormatCents(a.snap.BudgetCents)).FontSize(24).FontWeight(700).TextColor(p.text)
-				ui.Box(c).Height(6).Radius(3).Background(p.surfaceWarm).Children(func() {
-					if used > 0 {
-						color := p.accent
-						if used >= 100 {
-							color = p.coral
-						} else if used >= 70 {
-							color = p.amber
-						}
-						ui.Box(c).Height(6).Radius(3).WidthPercent(float32(used)).Background(color)
+		budgetCard := a.panel(c, ui.Column(c).Padding(16, 17).Gap(9), 18)
+		budgetCard.Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "月预算").FontSize(12).FontWeight(700).TextColor(p.text)
+				ui.Spacer(c)
+				ui.Text(c, monthLabelCN(a.currentMonth())).FontSize(9.5).TextColor(p.muted)
+			})
+			ui.Text(c, FormatCents(a.snap.BudgetCents)).FontSize(24).FontWeight(700).TextColor(p.text)
+			ui.Box(c).Height(6).Radius(3).Background(p.surfaceWarm).Children(func() {
+				if used > 0 {
+					color := p.accent
+					if used >= 100 {
+						color = p.coral
+					} else if used >= 70 {
+						color = p.amber
 					}
-				})
-				ui.Row(c).Children(func() {
-					ui.Textf(c, "已用 %s", FormatCents(a.snap.CurrentStats.ExpenseCents)).
-						FontSize(9.5).TextColor(p.muted)
-					ui.Spacer(c)
-					remainText := "剩 " + FormatCents(remain)
-					if remain < 0 {
-						remainText = "超出 " + FormatCents(-remain)
-					}
-					ui.Text(c, remainText).FontSize(9.5).
-						TextColor(map[bool]ui.Color{true: p.coral, false: p.muted}[remain < 0])
-				})
-				adjust := ui.ButtonBase(c).FillWidth().Height(31).Radius(8).Label("调整月预算").
-					Background(p.surfaceAlt).Border(1, p.border)
-				adjust.Children(func() {
-					ui.Row(c).Fill().Center().Children(func() {
-						ui.Text(c, "调整月预算").FontSize(10.5).FontWeight(500).TextColor(p.text)
-					})
-				})
-				if adjust.Hovered() {
-					adjust.Background(p.surfaceWarm)
-				}
-				if adjust.Clicked() {
-					a.openBudget()
+					ui.Box(c).Height(6).Radius(3).WidthPercent(float32(used)).Background(color)
 				}
 			})
+			ui.Row(c).Children(func() {
+				ui.Textf(c, "已用 %s", FormatCents(a.snap.CurrentStats.ExpenseCents)).
+					FontSize(9.5).TextColor(p.muted)
+				ui.Spacer(c)
+				remainText := "剩 " + FormatCents(remain)
+				if remain < 0 {
+					remainText = "超出 " + FormatCents(-remain)
+				}
+				ui.Text(c, remainText).FontSize(9.5).
+					TextColor(map[bool]ui.Color{true: p.coral, false: p.muted}[remain < 0])
+			})
+			adjust := ui.ButtonBase(c).FillWidth().Height(31).Radius(8).Label("调整月预算")
+			if a.useGlass {
+				adjust.Material(glass.Glass{Clarity: .35, Interactive: true}).Border(1, ui.RGBA(255, 255, 255, .24))
+			} else {
+				adjust.Background(p.surfaceAlt).Border(1, p.border)
+			}
+			adjust.Children(func() {
+				ui.Row(c).Fill().Center().Children(func() {
+					ui.Text(c, "调整月预算").FontSize(10.5).FontWeight(500).TextColor(p.text)
+				})
+			})
+			if adjust.Hovered() && !a.useGlass {
+				adjust.Background(p.surfaceWarm)
+			}
+			if adjust.Clicked() {
+				a.openBudget()
+			}
+		})
 
-		ui.Column(c).Grow(1).Padding(16, 17).Gap(9).Radius(18).
-			Background(p.surfaceAlt).Border(1, p.border).Children(func() {
+		info := a.panelAlt(c, ui.Column(c).Grow(1).Padding(16, 17).Gap(9), 18)
+		info.Children(func() {
 			ui.Text(c, "钱包合计").FontSize(11).FontWeight(600).TextColor(p.muted)
 			ui.Text(c, FormatCents(a.snap.WalletTotalCents)).FontSize(20).FontWeight(700).
 				TextColor(p.text).SingleLine()

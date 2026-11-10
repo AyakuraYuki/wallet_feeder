@@ -505,3 +505,23 @@ func TestNoteFieldKeepsFocus(t *testing.T) {
 		t.Fatalf("note field lost focus; texts: %v", tt.Texts())
 	}
 }
+
+func TestAppearanceSwitchBetweenGlassAndPaper(t *testing.T) {
+	a, _ := newUITestApp(t)
+	if !a.useGlass {
+		t.Fatal("Liquid Glass should be the default appearance")
+	}
+	tt := testerFor(a)
+	if err := tt.Click("纸感外观"); err != nil {
+		t.Fatal(err)
+	}
+	if a.useGlass {
+		t.Fatal("paper appearance switch did not take effect")
+	}
+	if err := tt.Click("极光外观"); err != nil {
+		t.Fatal(err)
+	}
+	if !a.useGlass {
+		t.Fatal("glass appearance switch did not restore Liquid Glass")
+	}
+}

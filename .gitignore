@@ -1,6 +1,7 @@
 # Go caches used by this checkout's sandboxed development flow
 .gomodcache/
 .gocache/
+.buildhome/
 
 # IDE
 .idea/

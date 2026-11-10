@@ -58,31 +58,35 @@ var lightLook = look{
 	stageBottom:  ui.Hex("#F8F1E6"),
 }
 
+// darkLook is the aurora palette: a cold night sky with mint aurora glass,
+// icy type and enough luminance for small labels. Glass mode always uses
+// it, even when the desktop is in light mode; the paper look still follows
+// the desktop.
 var darkLook = look{
-	background:   ui.Hex("#1C1916"),
-	surface:      ui.Hex("#26211C"),
-	surfaceAlt:   ui.Hex("#221E1A"),
-	surfaceWarm:  ui.Hex("#302921"),
-	border:       ui.Hex("#3D332A"),
-	borderStrong: ui.Hex("#574A3D"),
-	text:         ui.Hex("#F3E8DB"),
-	muted:        ui.Hex("#B09B85"),
-	accent:       ui.Hex("#8FBE9B"),
-	accentSoft:   ui.Hex("#2B3B2E"),
-	accentInk:    ui.Hex("#17251B"),
-	coral:        ui.Hex("#E28A75"),
-	coralSoft:    ui.Hex("#3A2925"),
-	amber:        ui.Hex("#E0B261"),
-	amberSoft:    ui.Hex("#3A3021"),
-	mint:         ui.Hex("#94C6A3"),
-	mintSoft:     ui.Hex("#29382D"),
-	blue:         ui.Hex("#8AAECB"),
-	blueSoft:     ui.Hex("#26313A"),
-	plum:         ui.Hex("#B79AC0"),
-	shadow:       ui.RGBA(0, 0, 0, 0.32),
-	hairline:     ui.Hex("#3A3028"),
-	stageTop:     ui.Hex("#273329"),
-	stageBottom:  ui.Hex("#2A241E"),
+	background:   ui.Hex("#06131C"),
+	surface:      ui.Hex("#0C1B24"),
+	surfaceAlt:   ui.Hex("#09161E"),
+	surfaceWarm:  ui.Hex("#132630"),
+	border:       ui.Hex("#223844"),
+	borderStrong: ui.Hex("#355463"),
+	text:         ui.Hex("#EDF7F5"),
+	muted:        ui.Hex("#8FAEB4"),
+	accent:       ui.Hex("#74E3C3"),
+	accentSoft:   ui.Hex("#0F2B27"),
+	accentInk:    ui.Hex("#06211D"),
+	coral:        ui.Hex("#F0899D"),
+	coralSoft:    ui.Hex("#351C26"),
+	amber:        ui.Hex("#E7C27B"),
+	amberSoft:    ui.Hex("#322B1C"),
+	mint:         ui.Hex("#74E3C3"),
+	mintSoft:     ui.Hex("#102B28"),
+	blue:         ui.Hex("#86C8FF"),
+	blueSoft:     ui.Hex("#10293A"),
+	plum:         ui.Hex("#B8A4FF"),
+	shadow:       ui.RGBA(0, 0, 0, 0.34),
+	hairline:     ui.Hex("#1A303A"),
+	stageTop:     ui.Hex("#0C2228"),
+	stageBottom:  ui.Hex("#07161D"),
 }
 
 func lookFor(c *ui.Context) look {
@@ -92,12 +96,18 @@ func lookFor(c *ui.Context) look {
 	return lightLook
 }
 
-// applyTheme takes the system's theme and overlays WalletFeeder's warm
-// palette, so native controls, focus rings, selection and text all follow
-// the same visual language as the custom drawing.
-func applyTheme(c *ui.Context) {
+// applyTheme overlays WalletFeeder's palette, so native controls, focus
+// rings, selection and text all follow the same visual language as the
+// custom drawing. The aurora glass look is always dark for contrast; the
+// paper look follows the desktop's appearance.
+func (a *App) applyTheme(c *ui.Context) {
 	t := *c.Theme()
-	p := lookFor(c)
+	dark := t.Dark || a.useGlass
+	p := lightLook
+	if dark {
+		p = darkLook
+	}
+	t.Dark = dark
 	t.Background = p.background
 	t.Surface = p.surface
 	t.SurfaceHover = p.surfaceWarm

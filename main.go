@@ -31,8 +31,10 @@ func main() {
 			Height:          780,
 			UseContentSize:  true,
 			MinWidth:        1000,
-			MinHeight:       720,
+			MinHeight:       760,
 			StateKey:        "main",
+			TitleBarStyle:   mygo.TitleBarHiddenInset,
+			TitleBarHeight:  58,
 			BackgroundColor: "light-dark(#F6F0E7, #1C1916)",
 			Content:         ui.View(app.view),
 		})
@@ -47,6 +49,7 @@ func main() {
 			return
 		}
 		app.start(filepath.Join(dir, "walletfeeder.db"))
+
 	})
 
 	if err := mygo.App.Run(); err != nil {

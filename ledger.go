@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -28,8 +29,9 @@ func (a *App) ledgerPage(c *ui.Context) {
 			})
 		case len(a.snap.Ledger) == 0:
 			ui.Column(c).Grow(1).Center().Children(func() {
-				ui.Column(c).Width(420).Padding(24).Gap(8).Center().Radius(18).
-					Background(p.surfaceAlt).Border(1, p.border).Children(func() {
+				empty := ui.Column(c).Width(420).Padding(24).Gap(8).Center()
+				empty = a.panelAlt(c, empty, 18)
+				empty.Children(func() {
 					ui.Text(c, "这个月还没有流水").FontSize(15).FontWeight(600).TextColor(p.text)
 					ui.Text(c, "在首页喂一口，或者换个月份看看。").FontSize(11).TextColor(p.muted).
 						TextAlign(ui.Center)
@@ -48,27 +50,44 @@ func (a *App) monthSwitcher(c *ui.Context) {
 	p := lookFor(c)
 	monthName := monthLabelCN(a.ledgerMonth)
 	ui.Row(c).Gap(5).AlignItems(ui.Center).Children(func() {
-		prev := ui.ButtonBase(c).Size(32, 32).Radius(999).Label("上一月").Tooltip("上一月").
-			Background(p.surface).Border(1, p.border).Disabled(a.busy)
+		prev := ui.ButtonBase(c).Size(32, 32).Radius(999).Label("上一月").Tooltip("上一月").Disabled(a.busy)
+		if a.useGlass {
+			prev.Material(glass.Glass{Interactive: true}).Border(1, ui.RGBA(255, 255, 255, .3))
+		} else {
+			prev.Background(p.surface).Border(1, p.border)
+		}
 		prev.Children(func() { ui.Text(c, "‹").FontSize(18).TextColor(p.text) })
 		if prev.Clicked() {
 			a.shiftLedgerMonth(-1)
 		}
 
-		ui.Box(c).Height(32).MinWidth(120).Padding(0, 12).Radius(999).
-			Background(p.surface).Border(1, p.border).Children(func() {
+		monthBox := ui.Box(c).Height(32).MinWidth(120).Padding(0, 12).Radius(999)
+		if a.useGlass {
+			monthBox.Material(glass.Glass{Clarity: .45}).Border(1, ui.RGBA(255, 255, 255, .26))
+		} else {
+			monthBox.Background(p.surface).Border(1, p.border)
+		}
+		monthBox.Children(func() {
 			ui.Row(c).Fill().Center().Children(func() {
 				ui.Text(c, monthName).FontSize(12).FontWeight(600).TextColor(p.text)
 			})
 		})
-		next := ui.ButtonBase(c).Size(32, 32).Radius(999).Label("下一月").Tooltip("下一月").
-			Background(p.surface).Border(1, p.border).Disabled(a.busy)
+		next := ui.ButtonBase(c).Size(32, 32).Radius(999).Label("下一月").Tooltip("下一月").Disabled(a.busy)
+		if a.useGlass {
+			next.Material(glass.Glass{Interactive: true}).Border(1, ui.RGBA(255, 255, 255, .3))
+		} else {
+			next.Background(p.surface).Border(1, p.border)
+		}
 		next.Children(func() { ui.Text(c, "›").FontSize(18).TextColor(p.text) })
 		if next.Clicked() {
 			a.shiftLedgerMonth(1)
 		}
 		if !monthStart(a.ledgerMonth).Equal(a.currentMonth()) {
-			if ui.Button(c, "回到本月").Label("回到本月").Disabled(a.busy).Clicked() {
+			back := ui.Button(c, "回到本月").Label("回到本月").Disabled(a.busy)
+			if a.useGlass {
+				back.Material(glass.Glass{Clarity: .4, Interactive: true})
+			}
+			if back.Clicked() {
 				a.goToCurrentMonth()
 			}
 		}
@@ -82,8 +101,8 @@ func (a *App) ledgerSummary(c *ui.Context) {
 		title = monthLabelCN(a.ledgerMonth) + "合计"
 	}
 	net := a.snap.LedgerStats.IncomeCents - a.snap.LedgerStats.ExpenseCents
-	ui.Row(c).Height(56).Padding(8, 16).AlignItems(ui.Center).Radius(15).
-		Background(p.surface).Border(1, p.border).Children(func() {
+	bar := a.panel(c, ui.Row(c).Height(56).Padding(8, 16).AlignItems(ui.Center), 15)
+	bar.Children(func() {
 		ui.Row(c).Gap(7).AlignItems(ui.Center).Width(140).Children(func() {
 			ui.Box(c).Size(6, 6).Radius(3).Background(p.accent)
 			ui.Text(c, title).FontSize(12).FontWeight(700).TextColor(p.text)
@@ -116,10 +135,9 @@ func netColor(net int64, p look) ui.Color {
 }
 
 func (a *App) ledgerListCard(c *ui.Context) {
-	p := lookFor(c)
 	entries := a.snap.Ledger
-	ui.Column(c).Grow(1).Radius(16).Background(p.surface).Border(1, p.border).
-		Clip().Padding(4, 0).Children(func() {
+	card := a.panel(c, ui.Column(c).Grow(1), 16)
+	card.Clip().Padding(4, 0).Children(func() {
 		a.ledgerList.Key = func(i int) any { return entries[i].ID }
 		ui.List(c, &a.ledgerList, len(entries), func(i int) {
 			a.ledgerRow(c, entries[i])
@@ -173,7 +191,11 @@ func (a *App) ledgerRow(c *ui.Context, e Entry) {
 		del := ui.ButtonBase(c).Size(26, 26).Radius(7).Label(deleteEntryLabel(e)).
 			Tooltip("删除这笔记录").Disabled(a.busy)
 		if del.Hovered() {
-			del.Background(p.coralSoft)
+			if a.useGlass {
+				del.Background(p.coral.Alpha(.20))
+			} else {
+				del.Background(p.coralSoft)
+			}
 		}
 		del.Children(func() {
 			ui.Text(c, "✕").FontSize(11).TextColor(p.muted)

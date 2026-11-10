@@ -118,12 +118,9 @@ func TestSnapshots(t *testing.T) {
 	save("home-reaction.png")
 
 	app.reaction = nil
-	tt.SetSize(1000, 760)
+	app.useGlass = false
 	tt.Frame()
-	save("home-compact.png")
+	save("home-paper.png")
 
-	tt.SetSize(1120, 780)
-	tt.SetDark(true)
-	tt.Frame()
-	save("home-dark.png")
+	app.useGlass = true
 }

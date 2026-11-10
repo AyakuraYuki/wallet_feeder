@@ -61,7 +61,8 @@ type App struct {
 	now      func() time.Time
 	dbPath   string
 
-	page appPage
+	page     appPage
+	useGlass bool
 
 	ready    bool
 	fatalErr string
@@ -111,6 +112,7 @@ func NewApp(store Store) *App {
 		form:        entryForm{kind: KindExpense},
 		ledgerMonth: monthStart(now()),
 		page:        pageHome,
+		useGlass:    true,
 	}
 	if store != nil {
 		a.ready = true

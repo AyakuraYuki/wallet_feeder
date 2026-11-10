@@ -315,7 +315,7 @@ func TestWalletEntryCounts(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	wallet := s.walletsForTest(t, ctx)[0]
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		if _, err := s.AddEntry(ctx, NewEntry{WalletID: wallet.ID, Kind: KindExpense, Category: "餐饮", AmountCents: 100}); err != nil {
 			t.Fatal(err)
 		}

@@ -4,16 +4,23 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
 // view is the whole window, rebuilt from state on every frame.
 func (a *App) view(c *ui.Context) {
-	applyTheme(c)
+	a.applyTheme(c)
 	p := lookFor(c)
 	a.shortcuts(c)
 
-	ui.Column(c).Fill().Background(p.background).Children(func() {
+	root := ui.Column(c).Fill()
+	if a.useGlass {
+		root.Draw(a.drawLiquidBackdrop)
+	} else {
+		root.Background(p.background)
+	}
+	root.Children(func() {
 		a.header(c)
 		switch {
 		case a.fatalErr != "":
@@ -54,44 +61,112 @@ func (a *App) shortcuts(c *ui.Context) {
 
 func (a *App) header(c *ui.Context) {
 	p := lookFor(c)
-	ui.Row(c).Height(58).FillWidth().Padding(0, 28).AlignItems(ui.Center).
-		BorderWidth(0, 0, 1, 0).BorderColor(p.hairline).Children(func() {
+	left := float32(28)
+	if bar := c.TitleBar(); bar.Left > 0 {
+		left = bar.Left + 15
+	}
+	ui.Row(c).Height(58).FillWidth().Padding(0, 28, 0, left).AlignItems(ui.Center).
+		DragWindow().BorderWidth(0, 0, 1, 0).BorderColor(p.hairline).Children(func() {
 		ui.Row(c).Gap(11).AlignItems(ui.Center).Children(func() {
-			ui.Box(c).Size(38, 38).Radius(12).Background(p.accentSoft).
-				Draw(func(pt *ui.Painter, r ui.Rect) { drawBrandMark(pt, r, p) })
+			mark := ui.Box(c).Size(38, 38).Radius(12)
+			if a.useGlass {
+				mark.Material(glass.Glass{Tint: p.accent.Alpha(.18), Interactive: false}).
+					Border(1, ui.RGBA(255, 255, 255, .36))
+			} else {
+				mark.Background(p.accentSoft)
+			}
+			mark.Draw(func(pt *ui.Painter, r ui.Rect) { drawBrandMark(pt, r, p) })
 			ui.Column(c).Gap(1).Children(func() {
 				ui.Text(c, "钱包饲养员").FontSize(18).FontWeight(700).TextColor(p.text)
-				ui.Text(c, "喂一口，记一笔").FontSize(11).TextColor(p.muted)
+				ui.Text(c, "喂一口，记一笔 · 仅存本地").FontSize(10.5).TextColor(p.muted)
 			})
 		})
 		ui.Spacer(c)
 		a.nav(c)
 		ui.Spacer(c)
-		ui.Row(c).Gap(5).AlignItems(ui.Center).Padding(6, 10).Radius(999).
-			Background(p.accentSoft).Children(func() {
-			ui.Box(c).Size(6, 6).Radius(3).Background(p.accent)
-			ui.Text(c, "仅存本地").FontSize(10).FontWeight(500).TextColor(p.accentInk)
-		})
+		a.appearanceSwitch(c)
 	})
 }
 
-func (a *App) nav(c *ui.Context) {
+// appearanceSwitch is the small demonstration control: one click swaps
+// between MyGo's Liquid Glass and the original paper UI. It is itself a
+// glass surface in the glass look, with an interactive tinted segment.
+func (a *App) appearanceSwitch(c *ui.Context) {
 	p := lookFor(c)
-	ui.Row(c).Gap(2).Padding(3).Radius(999).Background(p.surfaceAlt).Children(func() {
-		for i, label := range []string{"首页", "流水", "钱包"} {
-			page := appPage(i)
-			selected := a.page == page
-			b := ui.ButtonBase(c).Padding(8, 15).Radius(999).Label(label)
+	track := ui.Row(c).Gap(2).Padding(2).Radius(999)
+	if a.useGlass {
+		track.Material(glass.Glass{Clarity: .4})
+	} else {
+		track.Background(p.surfaceAlt).Border(1, p.border)
+	}
+	track.Children(func() {
+		for i, label := range []string{"极光", "纸感"} {
+			glassChoice := i == 0
+			selected := a.useGlass == glassChoice
+			b := ui.ButtonBase(c).Padding(4, 10).Radius(999).Height(24).
+				Label(label + "外观").Tooltip("切换为" + label + "外观")
 			switch {
+			case selected && a.useGlass:
+				b.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
 			case selected:
-				b.Background(p.surface).Shadow(0, 1, 3, 0, p.shadow)
+				b.Background(p.surface).Border(1, p.border)
 			case b.Hovered():
-				b.Background(p.surfaceWarm)
+				if a.useGlass {
+					b.Background(ui.RGBA(255, 255, 255, 0.22))
+				} else {
+					b.Background(p.surfaceWarm)
+				}
 			}
 			b.Children(func() {
 				color := p.muted
 				if selected {
 					color = p.text
+					if a.useGlass && glassChoice {
+						color = p.surface
+					}
+				}
+				ui.Text(c, label).FontSize(10).FontWeight(600).TextColor(color)
+			})
+			if b.Clicked() {
+				a.useGlass = glassChoice
+				a.focusAmount = false
+			}
+		}
+	})
+}
+
+func (a *App) nav(c *ui.Context) {
+	p := lookFor(c)
+	track := ui.Row(c).Gap(2).Padding(3).Radius(999)
+	if a.useGlass {
+		track.Material(glass.Glass{Clarity: .35}).Border(1, ui.RGBA(255, 255, 255, .28))
+	} else {
+		track.Background(p.surfaceAlt)
+	}
+	track.Children(func() {
+		for i, label := range []string{"首页", "流水", "钱包"} {
+			page := appPage(i)
+			selected := a.page == page
+			b := ui.ButtonBase(c).Padding(8, 15).Radius(999).Label(label)
+			switch {
+			case selected && a.useGlass:
+				b.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+			case selected:
+				b.Background(p.surface).Shadow(0, 1, 3, 0, p.shadow)
+			case b.Hovered():
+				if a.useGlass {
+					b.Background(alpha(p.surface, .20))
+				} else {
+					b.Background(p.surfaceWarm)
+				}
+			}
+			b.Children(func() {
+				color := p.muted
+				if selected {
+					color = p.text
+					if a.useGlass {
+						color = c.Theme().AccentText
+					}
 				}
 				ui.Text(c, label).FontSize(12.5).FontWeight(600).TextColor(color)
 			})
@@ -115,18 +190,24 @@ func (a *App) loadingPage(c *ui.Context) {
 func (a *App) errorPage(c *ui.Context) {
 	p := lookFor(c)
 	ui.Column(c).Fill().Center().Padding(24).Children(func() {
-		ui.Column(c).Width(430).Padding(24).Gap(12).Radius(20).
-			Background(p.surface).Border(1, p.border).Shadow(0, 12, 30, -12, p.shadow).
-			Children(func() {
-				ui.Text(c, "钱包睡着了").FontSize(20).FontWeight(700).TextColor(p.text)
-				ui.Text(c, a.fatalErr).FontSize(12.5).TextColor(p.muted)
-				ui.Text(c, "数据只保存在这台电脑上，重试不会影响已有记录。").FontSize(11.5).TextColor(p.muted)
-				ui.Row(c).Gap(8).Children(func() {
-					if ui.PrimaryButton(c, "再试一次").Label("再试一次").Clicked() {
-						a.retry()
-					}
-				})
+		card := a.panel(c, ui.Column(c).Width(430).Padding(24).Gap(12), 20)
+		if !a.useGlass {
+			card.Shadow(0, 12, 30, -12, p.shadow)
+		}
+		card.Children(func() {
+			ui.Text(c, "钱包睡着了").FontSize(20).FontWeight(700).TextColor(p.text)
+			ui.Text(c, a.fatalErr).FontSize(12.5).TextColor(p.muted)
+			ui.Text(c, "数据只保存在这台电脑上，重试不会影响已有记录。").FontSize(11.5).TextColor(p.muted)
+			ui.Row(c).Gap(8).Children(func() {
+				retry := ui.PrimaryButton(c, "再试一次").Label("再试一次")
+				if a.useGlass {
+					retry.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+				}
+				if retry.Clicked() {
+					a.retry()
+				}
 			})
+		})
 	})
 }
 
@@ -142,7 +223,22 @@ func (a *App) modals(c *ui.Context) {
 	if !a.modalOpen {
 		return
 	}
-	ui.Modal(c, &a.modalOpen, func() { a.modalContent(c) })
+	p := lookFor(c)
+	ui.DialogBase(c, &a.modalOpen, func(backdrop, panel ui.Element) {
+		if a.useGlass {
+			backdrop.Background(ui.RGBA(20, 24, 20, .34))
+			panel.Width(440).Padding(22).Gap(10).Radius(26).
+				Material(glass.Glass{Tint: p.background.Alpha(.78), Clarity: .05}).
+				Border(1, ui.RGBA(255, 255, 255, .42)).
+				Shadow(0, 24, 80, -32, ui.RGBA(35, 25, 15, .38))
+		} else {
+			backdrop.Background(ui.RGBA(0, 0, 0, .4))
+			panel.Width(440).Padding(22).Gap(10).Radius(20).
+				Background(p.surface).Border(1, p.border).
+				Shadow(0, 10, 30, 0, ui.RGBA(0, 0, 0, .3))
+		}
+		a.modalContent(c)
+	})
 }
 
 func (a *App) modalContent(c *ui.Context) {
@@ -162,7 +258,7 @@ func (a *App) modalContent(c *ui.Context) {
 		title = "校准余额"
 		subtitle = "输入钱包里的实际余额，差额会自动记一笔「余额校准」。"
 	}
-	ui.Column(c).Width(410).Gap(10).Children(func() {
+	ui.Column(c).FillWidth().Gap(10).Children(func() {
 		ui.Text(c, title).FontSize(19).FontWeight(700).TextColor(p.text)
 		if subtitle != "" {
 			ui.Text(c, subtitle).FontSize(12).TextColor(p.muted)

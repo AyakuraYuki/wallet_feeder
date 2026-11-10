@@ -5,6 +5,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 )
 
@@ -47,17 +48,18 @@ func (a *App) summaryStrip(c *ui.Context) {
 		walletNote = "有钱包在透支"
 	}
 	ui.Row(c).Height(88).Gap(12).Children(func() {
-		statCard(c, "本月支出", FormatCents(a.snap.CurrentStats.ExpenseCents), spendNote, p.coral)
-		statCard(c, "本月收入", FormatCents(a.snap.CurrentStats.IncomeCents), incomeNote, p.mint)
-		statCard(c, "钱包合计", FormatCents(a.snap.WalletTotalCents), walletNote,
+		a.statCard(c, "本月支出", FormatCents(a.snap.CurrentStats.ExpenseCents), spendNote, p.coral)
+		a.statCard(c, "本月收入", FormatCents(a.snap.CurrentStats.IncomeCents), incomeNote, p.mint)
+		a.statCard(c, "钱包合计", FormatCents(a.snap.WalletTotalCents), walletNote,
 			moodColor(MoodFor(a.snap.WalletTotalCents, a.snap.BudgetCents), p))
 	})
 }
 
-func statCard(c *ui.Context, label, value, note string, accent ui.Color) {
+func (a *App) statCard(c *ui.Context, label, value, note string, accent ui.Color) {
 	p := lookFor(c)
-	ui.Column(c).Grow(1).FillHeight().Padding(13, 16).Radius(16).
-		Background(p.surface).Border(1, p.border).Children(func() {
+	card := ui.Column(c).Grow(1).FillHeight().Padding(13, 16)
+	card = a.panel(c, card, 16)
+	card.Children(func() {
 		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
 			ui.Box(c).Size(6, 6).Radius(3).Background(accent)
 			ui.Text(c, label).FontSize(11).FontWeight(500).TextColor(p.muted)
@@ -85,9 +87,16 @@ func (a *App) walletStage(c *ui.Context) {
 		titleColor = p.coral
 	}
 
-	card := ui.Column(c).Grow(1).Padding(16, 16).Gap(6).Radius(22).Clip().
-		Border(1, p.border)
-	card.Gradient(pal.top, pal.bottom, 155)
+	card := ui.Column(c).Grow(1).Padding(16, 16).Gap(6).Radius(22).Clip()
+	if a.useGlass {
+		rim := ui.RGBA(255, 255, 255, .34)
+		if p.background == darkLook.background {
+			rim = ui.RGBA(255, 255, 255, .14)
+		}
+		card.Material(glass.Glass{Style: glass.Clear, Tint: pal.body.Alpha(.14), Clarity: .2}).Border(1, rim)
+	} else {
+		card.Gradient(pal.top, pal.bottom, 155).Border(1, p.border)
+	}
 	card.Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
@@ -96,7 +105,12 @@ func (a *App) walletStage(c *ui.Context) {
 			})
 			ui.Spacer(c)
 			budget := ui.ButtonBase(c).Padding(5, 9).Radius(999).
-				Background(alpha(p.surface, 0.62)).Label("调整月预算").Tooltip("调整月预算")
+				Label("调整月预算").Tooltip("调整月预算")
+			if a.useGlass {
+				budget.Material(glass.Glass{Clarity: .5, Interactive: true})
+			} else {
+				budget.Background(alpha(p.surface, 0.62))
+			}
 			budget.Children(func() {
 				ui.Textf(c, "月预算 %s", FormatCentsCompact(a.snap.BudgetCents)).
 					FontSize(10).FontWeight(500).TextColor(p.muted)
@@ -104,7 +118,7 @@ func (a *App) walletStage(c *ui.Context) {
 			if budget.Clicked() {
 				a.openBudget()
 			}
-			if budget.Hovered() {
+			if budget.Hovered() && !a.useGlass {
 				budget.Background(alpha(p.surface, 0.9))
 			}
 		})
@@ -154,7 +168,11 @@ func (a *App) walletStage(c *ui.Context) {
 			ui.Textf(c, "预算 %s", FormatCentsCompact(a.snap.BudgetCents)).
 				FontSize(10).TextColor(p.muted)
 		})
-		ui.Box(c).Height(5).Radius(3).Background(alpha(p.surface, 0.62)).Children(func() {
+		trackColor := alpha(p.surface, 0.62)
+		if a.useGlass {
+			trackColor = alpha(p.text, 0.10)
+		}
+		ui.Box(c).Height(5).Radius(3).Background(trackColor).Children(func() {
 			if used > 0 {
 				ui.Box(c).Height(5).Radius(3).WidthPercent(float32(used)).Background(barColor)
 			}
@@ -164,8 +182,7 @@ func (a *App) walletStage(c *ui.Context) {
 
 func (a *App) walletsCard(c *ui.Context) {
 	p := lookFor(c)
-	card := ui.Column(c).Height(218).Padding(12, 14).Gap(7).Radius(20).
-		Background(p.surface).Border(1, p.border)
+	card := a.panel(c, ui.Column(c).Height(218).Padding(12, 14).Gap(7), 20)
 	card.Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "钱包们").FontSize(13.5).FontWeight(700).TextColor(p.text)
@@ -197,7 +214,11 @@ func (a *App) walletsCard(c *ui.Context) {
 		if len(wallets) == 0 {
 			ui.Column(c).Grow(1).Center().Gap(5).Children(func() {
 				ui.Text(c, "这里空荡荡的").FontSize(12).FontWeight(600).TextColor(p.text)
-				if ui.Button(c, "添加第一只钱包").Label("添加第一只钱包").Clicked() {
+				add := ui.Button(c, "添加第一只钱包").Label("添加第一只钱包")
+				if a.useGlass {
+					add.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+				}
+				if add.Clicked() {
 					a.openAddWallet()
 				}
 			})
@@ -262,8 +283,7 @@ func (a *App) walletStatusRow(c *ui.Context, w Wallet, p look) {
 
 func (a *App) feedCard(c *ui.Context, grow bool) {
 	p := lookFor(c)
-	card := ui.Column(c).Padding(16, 18).Gap(7).Radius(20).
-		Background(p.surface).Border(1, p.border)
+	card := a.panel(c, ui.Column(c).Padding(16, 18).Gap(7), 20)
 	if grow {
 		card.Grow(1)
 	} else {
@@ -280,12 +300,23 @@ func (a *App) feedCard(c *ui.Context, grow bool) {
 		})
 
 		// Amount: the single ui.TextInput of the quick-entry path, bound to
-		// a handle so the form can focus it after each saved bite.
-		ui.Row(c).Gap(7).AlignItems(ui.Center).Children(func() {
+		// a handle so the form can focus it after each saved bite. On glass,
+		// the input loses its opaque skin so the field frame can be glass.
+		frame := ui.Row(c).Gap(7).AlignItems(ui.Center).Height(52).Padding(0, 10)
+		frame = a.fieldFrame(c, frame, 13)
+		borderColor := alpha(p.text, .10)
+		if a.amountRef.Focused(c) {
+			borderColor = p.accent
+		}
+		if a.useGlass {
+			frame.Border(1, borderColor)
+		}
+		frame.Children(func() {
 			ui.Text(c, "¥").FontSize(24).FontWeight(700).TextColor(p.muted).Padding(0, 0, 0, 2)
 			in := ui.TextInput(c.Key("entry-amount"), &a.form.amount).
 				Bind(&a.amountRef).Grow(1).Height(48).FontSize(25).FontWeight(650).
 				Label("金额").Placeholder("0.00").MaxLength(16).Disabled(a.busy).AutoFocus()
+			in = a.transparentInput(in)
 			if a.amountInvalidMessage() != "" {
 				in.Invalid(true)
 			}
@@ -312,15 +343,25 @@ func (a *App) feedCard(c *ui.Context, grow bool) {
 				chip := ui.ButtonBase(c).Padding(5, 9).Height(31).Radius(999).
 					Label("分类：" + cat.Name).Disabled(a.busy)
 				switch {
+				case selected && a.useGlass:
+					chip.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
 				case selected:
 					chip.Background(p.accent)
+				case catBad && a.useGlass:
+					chip.Material(glass.Glass{Tint: p.coral.Alpha(.42), Interactive: true})
 				case catBad:
 					chip.Background(p.coralSoft).Border(1, p.coral)
+				case a.useGlass:
+					chip.Material(glass.Glass{Clarity: .5, Interactive: true})
 				default:
 					chip.Background(p.background).Border(1, p.border)
 				}
 				if chip.Hovered() && !selected {
-					chip.Background(p.surfaceAlt)
+					if a.useGlass {
+						chip.Material(glass.Glass{Clarity: .32, Interactive: true})
+					} else {
+						chip.Background(p.surfaceAlt)
+					}
 				}
 				chip.Children(func() {
 					color := p.text
@@ -360,15 +401,25 @@ func (a *App) feedCard(c *ui.Context, grow bool) {
 				chip := ui.ButtonBase(c).Padding(5, 9).Height(31).Radius(999).
 					Label("钱包：" + w.Name).Disabled(a.busy)
 				switch {
+				case selected && a.useGlass:
+					chip.Material(glass.Glass{Tint: p.text.Alpha(.82), Interactive: true})
 				case selected:
 					chip.Background(p.text)
+				case walBad && a.useGlass:
+					chip.Material(glass.Glass{Tint: p.coral.Alpha(.42), Interactive: true})
 				case walBad:
 					chip.Background(p.coralSoft).Border(1, p.coral)
+				case a.useGlass:
+					chip.Material(glass.Glass{Clarity: .5, Interactive: true})
 				default:
 					chip.Background(p.background).Border(1, p.border)
 				}
 				if chip.Hovered() && !selected {
-					chip.Background(p.surfaceAlt)
+					if a.useGlass {
+						chip.Material(glass.Glass{Clarity: .32, Interactive: true})
+					} else {
+						chip.Background(p.surfaceAlt)
+					}
 				}
 				chip.Children(func() {
 					color := p.text
@@ -394,11 +445,17 @@ func (a *App) feedCard(c *ui.Context, grow bool) {
 			note := ui.TextInput(c.Key("entry-note"), &a.form.note).
 				Grow(1).Height(38).FontSize(11.5).Label("备注").
 				Placeholder("备注（选填）").MaxLength(maxNoteRunes).Disabled(a.busy)
+			if a.useGlass {
+				note.Radius(10).Material(glass.Glass{Clarity: .45}).BorderWidth(0)
+			}
 			if note.Submitted() && !a.busy {
 				a.submitEntry(c)
 			}
 			_, amountOK := a.amountCents()
 			feed := ui.PrimaryButton(c, "投喂").Label("投喂钱包").Height(38).Padding(0, 20)
+			if a.useGlass {
+				feed.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+			}
 			feed.Disabled(!amountOK || a.busy)
 			if feed.Clicked() {
 				a.submitEntry(c)
@@ -425,8 +482,8 @@ func (a *App) feedCard(c *ui.Context, grow bool) {
 
 		if grow && len(a.breakdown) == 0 {
 			ui.Spacer(c)
-			ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(10, 11).Radius(12).
-				Background(p.surfaceAlt).Children(func() {
+			tip := a.panelAlt(c, ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(10, 11), 12)
+			tip.Children(func() {
 				ui.Text(c, "🌱").FontSize(17)
 				ui.Column(c).Grow(1).Gap(1).Children(func() {
 					ui.Text(c, "第一口会让这里长出口味地图").FontSize(10.5).FontWeight(600).TextColor(p.text)
@@ -439,7 +496,13 @@ func (a *App) feedCard(c *ui.Context, grow bool) {
 
 func (a *App) kindToggle(c *ui.Context) {
 	p := lookFor(c)
-	ui.Row(c).Padding(3).Gap(2).Radius(999).Background(p.background).Border(1, p.border).Children(func() {
+	track := ui.Row(c).Padding(3).Gap(2).Radius(999)
+	if a.useGlass {
+		track.Material(glass.Glass{Clarity: .45})
+	} else {
+		track.Background(p.background).Border(1, p.border)
+	}
+	track.Children(func() {
 		for i, label := range []string{"支出", "收入"} {
 			kind := KindExpense
 			if i == 1 {
@@ -448,12 +511,21 @@ func (a *App) kindToggle(c *ui.Context) {
 			selected := a.form.kind == kind
 			b := ui.ButtonBase(c).Padding(4, 10).Radius(999).Label("记录" + label).Disabled(a.busy)
 			if selected {
-				b.Background(p.surface).Shadow(0, 1, 2, 0, p.shadow)
+				if a.useGlass {
+					b.Material(glass.Glass{Tint: p.accent.Alpha(.80), Interactive: true})
+				} else {
+					b.Background(p.surface).Shadow(0, 1, 2, 0, p.shadow)
+				}
+			} else if a.useGlass && b.Hovered() {
+				b.Background(alpha(p.surface, .18))
 			}
 			b.Children(func() {
 				color := p.muted
 				if selected {
 					color = p.text
+					if a.useGlass {
+						color = p.surface
+					}
 				}
 				ui.Text(c, label).FontSize(10.5).FontWeight(600).TextColor(color)
 			})
@@ -466,8 +538,7 @@ func (a *App) kindToggle(c *ui.Context) {
 
 func (a *App) categoryCard(c *ui.Context) ui.Element {
 	p := lookFor(c)
-	card := ui.Column(c).Padding(13, 16).Gap(5).Radius(20).
-		Background(p.surface).Border(1, p.border)
+	card := a.panel(c, ui.Column(c).Padding(13, 16).Gap(5), 20)
 	card.Children(func() {
 		ui.Row(c).AlignItems(ui.Baseline).Gap(6).Children(func() {
 			ui.Text(c, "这个月喂去了哪里").FontSize(13.5).FontWeight(700).TextColor(p.text)
@@ -488,7 +559,11 @@ func (a *App) categoryCard(c *ui.Context) ui.Element {
 				ui.Text(c, FormatCents(cat.AmountCents)).FontSize(10.5).FontWeight(600).TextColor(p.text)
 				ui.Textf(c, "%.1f%%", pct).FontSize(9.5).TextColor(p.muted).Width(42).TextAlign(ui.End)
 			})
-			ui.Box(c).Height(3.5).Radius(2).Background(p.surfaceWarm).Children(func() {
+			track := p.surfaceWarm
+			if a.useGlass {
+				track = alpha(p.text, .09)
+			}
+			ui.Box(c).Height(3.5).Radius(2).Background(track).Children(func() {
 				if pct > 0 {
 					ui.Box(c).Height(3.5).Radius(2).WidthPercent(float32(pct)).Background(color)
 				}
