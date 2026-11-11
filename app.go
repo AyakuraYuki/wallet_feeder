@@ -157,9 +157,7 @@ func (a *App) start(path string) {
 	a.fatalErr = ""
 	a.ready = false
 	ctx := a.workCtx
-	a.workWG.Add(1)
-	go func() {
-		defer a.workWG.Done()
+	a.workWG.Go(func() {
 		started, err := a.openStore(ctx, path)
 		// Register the new handle before handing its ownership to the UI.
 		// close can therefore dispose of it even when the window is gone
@@ -187,7 +185,7 @@ func (a *App) start(path string) {
 			a.store = started
 			a.reload()
 		})
-	}()
+	})
 }
 
 // AttachStore is the synchronous testing seam for a store that is already
@@ -283,11 +281,9 @@ func (a *App) runTask(store Store, work func(context.Context, Store) (Snapshot, 
 		run()
 		return
 	}
-	a.workWG.Add(1)
-	go func() {
-		defer a.workWG.Done()
+	a.workWG.Go(func() {
 		run()
-	}()
+	})
 }
 
 func (a *App) finishTask(seq uint64, snap Snapshot, err error, opts taskOptions) {
