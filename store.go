@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -108,9 +109,47 @@ type SQLiteStore struct {
 
 var _ Store = (*SQLiteStore)(nil)
 
+// secureSQLiteFile creates the ledger with owner-only permissions and also
+// tightens files made by older releases. Chmod the descriptor rather than
+// the path so a symlink cannot chmod another file.
+func secureSQLiteFile(path string) error {
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("sqlite: database must be a regular file without symlinks: %s", path)
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("sqlite: inspect database: %w", err)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("sqlite: create private database: %w", err)
+	}
+	if info, statErr := f.Stat(); statErr != nil {
+		_ = f.Close()
+		return fmt.Errorf("sqlite: inspect open database: %w", statErr)
+	} else if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return fmt.Errorf("sqlite: database is not a regular file: %s", path)
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sqlite: protect database: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("sqlite: close protected database: %w", err)
+	}
+	return nil
+}
+
 // OpenSQLiteStore opens path, applies the schema and seeds the first
 // wallet. The parent directory must already exist.
 func OpenSQLiteStore(ctx context.Context, path string) (*SQLiteStore, error) {
+	if path != ":memory:" {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := secureSQLiteFile(path); err != nil {
+			return nil, err
+		}
+	}
 	db, err := sqlite.Open(ctx, path, sqlite.OpenOptions{BusyTimeout: 5 * time.Second})
 	if err != nil {
 		return nil, err
@@ -175,8 +214,8 @@ func (s *SQLiteStore) bootstrap(ctx context.Context) error {
 }
 
 // Snapshot reads the current-month overview, all wallets and one ledger
-// month at once. SQLite serializes the reads on the connection, so the
-// result is a consistent view for the window.
+// month at once. App serializes this batch against its own writes and main
+// holds a single-instance lock; the connection itself has no read transaction.
 func (s *SQLiteStore) Snapshot(ctx context.Context, currentMonth, ledgerMonth time.Time) (Snapshot, error) {
 	var snap Snapshot
 	snap.CurrentMonth = monthStart(currentMonth)

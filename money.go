@@ -59,9 +59,12 @@ func ParseCents(s string, allowNegative bool) (int64, error) {
 	}
 
 	// Accept groups of three digits separated by commas ("1,234.50") but
-	// only when they are actually grouped that way.
-	s = strings.ReplaceAll(s, ",", "")
-	s = strings.ReplaceAll(s, "，", "")
+	// reject malformed groups instead of silently changing the amount.
+	var err error
+	s, err = normalizeThousands(s)
+	if err != nil {
+		return 0, err
+	}
 
 	whole, frac, hasDot := strings.Cut(s, ".")
 	if whole == "" {
@@ -101,6 +104,35 @@ func ParseCents(s string, allowNegative bool) (int64, error) {
 	return cents, nil
 }
 
+func normalizeThousands(s string) (string, error) {
+	if !strings.ContainsAny(s, ",，") {
+		return s, nil
+	}
+	s = strings.ReplaceAll(s, "，", ",")
+	head, tail, hasDot := strings.Cut(s, ".")
+	groups := strings.Split(head, ",")
+	if len(groups[0]) < 1 || len(groups[0]) > 3 {
+		return "", ErrAmountFormat
+	}
+	for _, group := range groups {
+		for _, r := range group {
+			if r < '0' || r > '9' {
+				return "", ErrAmountFormat
+			}
+		}
+	}
+	for _, group := range groups[1:] {
+		if len(group) != 3 {
+			return "", ErrAmountFormat
+		}
+	}
+	normalized := strings.Join(groups, "")
+	if hasDot {
+		normalized += "." + tail
+	}
+	return normalized, nil
+}
+
 // ParsePositiveCents reads a strictly positive amount for a transaction or
 // a budget.
 func ParsePositiveCents(s string) (int64, error) {
@@ -124,12 +156,13 @@ func ParseBalanceCents(s string) (int64, error) {
 // text.
 func FormatCents(cents int64) string {
 	sign := ""
+	whole, frac := cents/centsPerYuan, cents%centsPerYuan
 	if cents < 0 {
 		sign = "−"
-		cents = -cents
+		// Negating the quotient and remainder separately also handles
+		// math.MinInt, whose absolute value does not fit in an int64.
+		whole, frac = -whole, -frac
 	}
-	whole := cents / centsPerYuan
-	frac := cents % centsPerYuan
 	return sign + "¥" + groupDigits(whole) + "." + fmt.Sprintf("%02d", frac)
 }
 
@@ -152,11 +185,12 @@ func FormatDelta(cents int64) string {
 func FormatCentsCompact(cents int64) string {
 	if cents%centsPerYuan == 0 {
 		sign := ""
+		whole := cents / centsPerYuan
 		if cents < 0 {
 			sign = "−"
-			cents = -cents
+			whole = -whole
 		}
-		return sign + "¥" + groupDigits(cents/centsPerYuan)
+		return sign + "¥" + groupDigits(whole)
 	}
 	return FormatCents(cents)
 }

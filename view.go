@@ -13,6 +13,7 @@ func (a *App) view(c *ui.Context) {
 	a.applyTheme(c)
 	p := lookFor(c)
 	a.shortcuts(c)
+	a.refreshAtMonthBoundary(c)
 
 	root := ui.Column(c).Fill()
 	if a.useGlass {
@@ -22,6 +23,9 @@ func (a *App) view(c *ui.Context) {
 	}
 	root.Children(func() {
 		a.header(c)
+		if a.ready && a.refreshNeeded {
+			a.refreshBanner(c)
+		}
 		switch {
 		case a.fatalErr != "":
 			a.errorPage(c)
@@ -177,6 +181,20 @@ func (a *App) nav(c *ui.Context) {
 	})
 }
 
+// refreshBanner keeps a read failure visible after its toast disappears.
+// Its action only reloads data and can never repeat a committed mutation.
+func (a *App) refreshBanner(c *ui.Context) {
+	p := lookFor(c)
+	ui.Row(c).Height(38).FillWidth().Padding(0, 28).Gap(10).AlignItems(ui.Center).
+		Background(p.surfaceAlt).Children(func() {
+		ui.Text(c, "账本刷新失败，当前显示最近一次成功读取的数据。").FontSize(11).TextColor(p.coral)
+		ui.Spacer(c)
+		if ui.Button(c, "刷新账本").Label("刷新账本").Disabled(a.busy || a.refreshing).Clicked() {
+			a.reload()
+		}
+	})
+}
+
 func (a *App) loadingPage(c *ui.Context) {
 	p := lookFor(c)
 	ui.Column(c).Fill().Center().Gap(10).Children(func() {
@@ -224,7 +242,11 @@ func (a *App) modals(c *ui.Context) {
 		return
 	}
 	p := lookFor(c)
-	ui.DialogBase(c, &a.modalOpen, func(backdrop, panel ui.Element) {
+	// DialogBase dismisses on Escape and backdrop clicks. While a mutation
+	// is in flight that would hide both its result and the preserved draft,
+	// so acknowledge dismissal only when the dialog is idle.
+	open := a.modalOpen
+	ui.DialogBase(c, &open, func(backdrop, panel ui.Element) {
 		if a.useGlass {
 			backdrop.Background(ui.RGBA(20, 24, 20, .34))
 			panel.Width(440).Padding(22).Gap(10).Radius(26).
@@ -239,6 +261,9 @@ func (a *App) modals(c *ui.Context) {
 		}
 		a.modalContent(c)
 	})
+	if !open && !a.busy {
+		a.closeModal()
+	}
 }
 
 func (a *App) modalContent(c *ui.Context) {

@@ -25,10 +25,11 @@ func MoodFor(balanceCents, budgetCents int64) Mood {
 		}
 		return MoodSlim
 	}
+	// Compare with division so very large positive balances cannot overflow.
 	switch {
-	case balanceCents*2 > budgetCents:
+	case balanceCents > budgetCents/2:
 		return MoodPlump
-	case balanceCents*5 >= budgetCents:
+	case balanceCents > (budgetCents-1)/5:
 		return MoodOkay
 	default:
 		return MoodSlim

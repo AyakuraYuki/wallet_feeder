@@ -55,18 +55,25 @@ const (
 // App is the window's complete state. It is only mutated on the main
 // thread; background tasks hand their result back through dispatch.
 type App struct {
-	store    Store
-	dispatch func(func())
-	syncWork bool
-	now      func() time.Time
-	dbPath   string
+	store      Store
+	dispatch   func(func())
+	syncWork   bool
+	now        func() time.Time
+	dbPath     string
+	openStore  func(context.Context, string) (Store, error)
+	workCtx    context.Context
+	cancelWork context.CancelFunc
+	workWG     sync.WaitGroup
+	closed     bool
 
 	page     appPage
 	useGlass bool
 
-	ready    bool
-	fatalErr string
-	busy     bool
+	ready         bool
+	fatalErr      string
+	busy          bool
+	refreshing    bool
+	refreshNeeded bool
 
 	snap      Snapshot
 	breakdown []CategoryTotal
@@ -77,10 +84,11 @@ type App struct {
 	shakeWalletUntil   time.Time
 	reaction           *feedReaction
 
-	ledgerMonth   time.Time
-	ledgerLoading bool
-	ledgerList    ui.ListState
-	walletList    ui.ListState
+	ledgerMonth        time.Time
+	ledgerLoading      bool
+	ledgerList         ui.ListState
+	walletList         ui.ListState
+	monthRefreshTarget time.Time
 
 	amountRef   ui.Handle
 	focusAmount bool
@@ -97,15 +105,17 @@ type App struct {
 	deleteWalletOpen bool
 	deleteWalletID   int64
 
-	toast  string
-	seq    uint64
-	dataMu sync.Mutex
+	toast        string
+	seq          uint64
+	dataMu       sync.Mutex
+	pendingStore Store // Owned by dataMu until the startup callback takes it.
 }
 
 // NewApp prepares the UI state around a persistence boundary. Production
 // calls Start; tests inject an in-memory store and enable syncWork.
 func NewApp(store Store) *App {
 	now := time.Now
+	ctx, cancel := context.WithCancel(context.Background())
 	a := &App{
 		store:       store,
 		now:         now,
@@ -113,6 +123,11 @@ func NewApp(store Store) *App {
 		ledgerMonth: monthStart(now()),
 		page:        pageHome,
 		useGlass:    true,
+		openStore: func(ctx context.Context, path string) (Store, error) {
+			return OpenSQLiteStore(ctx, path)
+		},
+		workCtx:    ctx,
+		cancelWork: cancel,
 	}
 	if store != nil {
 		a.ready = true
@@ -133,21 +148,43 @@ func (a *App) post(fn func()) {
 }
 
 // start opens the SQLite file off the main thread so the window can be
-// interactive immediately. It is also the retry path after a startup
-// failure.
+// interactive immediately. It is also the retry path after a startup failure.
 func (a *App) start(path string) {
+	if a.closed {
+		return
+	}
 	a.dbPath = path
 	a.fatalErr = ""
 	a.ready = false
+	ctx := a.workCtx
+	a.workWG.Add(1)
 	go func() {
-		ctx := context.Background()
-		store, err := OpenSQLiteStore(ctx, path)
+		defer a.workWG.Done()
+		started, err := a.openStore(ctx, path)
+		// Register the new handle before handing its ownership to the UI.
+		// close can therefore dispose of it even when the window is gone
+		// before the queued startup callback runs.
+		a.dataMu.Lock()
+		active := err == nil && ctx.Err() == nil
+		if active {
+			a.pendingStore = started
+		}
+		a.dataMu.Unlock()
+		if err == nil && !active {
+			_ = started.Close()
+		}
 		a.post(func() {
+			if a.closed || ctx.Err() != nil {
+				return
+			}
 			if err != nil {
 				a.fatalErr = friendlyError(err)
 				return
 			}
-			a.store = store
+			a.dataMu.Lock()
+			a.pendingStore = nil
+			a.dataMu.Unlock()
+			a.store = started
 			a.reload()
 		})
 	}()
@@ -156,12 +193,18 @@ func (a *App) start(path string) {
 // AttachStore is the synchronous testing seam for a store that is already
 // open.
 func (a *App) AttachStore(store Store) {
+	if a.closed {
+		return
+	}
 	a.store = store
 	a.ready = true
 	a.reload()
 }
 
 func (a *App) retry() {
+	if a.closed {
+		return
+	}
 	a.fatalErr = ""
 	a.ready = false
 	if a.store != nil {
@@ -174,38 +217,65 @@ func (a *App) retry() {
 	a.start(a.dbPath)
 }
 
+// close stops new work, cancels and joins every background operation, then
+// closes the store. MyGo invokes this on the UI thread, so posted callbacks
+// cannot race this state transition.
 func (a *App) close() {
+	if a.closed {
+		return
+	}
+	a.closed = true
+	a.cancelWork()
+	a.workWG.Wait()
+	a.dataMu.Lock()
+	pending := a.pendingStore
+	a.pendingStore = nil
+	a.dataMu.Unlock()
+	if pending != nil {
+		_ = pending.Close()
+	}
 	if a.store != nil {
 		_ = a.store.Close()
 		a.store = nil
 	}
+	a.ready = false
 }
 
 type taskOptions struct {
-	writing   bool
-	onSuccess func()
-	onError   func(error)
+	writing       bool
+	restoreLedger bool
+	onSuccess     func()
+	onError       func(error)
 }
+
+// refreshError marks a committed write whose subsequent snapshot failed.
+// It is deliberately distinct from a write failure: retrying the former
+// must never repeat the mutation.
+type refreshError struct{ err error }
+
+func (e *refreshError) Error() string { return "refresh after commit: " + e.err.Error() }
+func (e *refreshError) Unwrap() error { return e.err }
 
 func (a *App) beginTask(opts taskOptions) uint64 {
 	a.seq++
 	if opts.writing {
 		a.busy = true
+	} else {
+		a.refreshing = true
 	}
 	return a.seq
 }
 
-func (a *App) runTask(work func(context.Context) (Snapshot, error), opts taskOptions) {
-	if a.store == nil && !opts.writing {
+func (a *App) runTask(store Store, work func(context.Context, Store) (Snapshot, error), opts taskOptions) {
+	if a.closed || store == nil {
 		return
 	}
 	seq := a.beginTask(opts)
 	run := func() {
-		// Snapshot is a batch of reads, not one SQLite transaction. The
-		// mutex keeps a write from committing between those reads, so the
-		// window never shows a half-updated month.
+		// Single-instance mode plus this mutex keeps writes from committing
+		// between the reads that make up one window snapshot.
 		a.dataMu.Lock()
-		snap, err := work(context.Background())
+		snap, err := work(a.workCtx, store)
 		a.dataMu.Unlock()
 		a.post(func() { a.finishTask(seq, snap, err, opts) })
 	}
@@ -213,21 +283,45 @@ func (a *App) runTask(work func(context.Context) (Snapshot, error), opts taskOpt
 		run()
 		return
 	}
-	go run()
+	a.workWG.Add(1)
+	go func() {
+		defer a.workWG.Done()
+		run()
+	}()
 }
 
 func (a *App) finishTask(seq uint64, snap Snapshot, err error, opts taskOptions) {
-	if seq != a.seq {
+	if a.closed || seq != a.seq {
 		return
 	}
 	if opts.writing {
 		a.busy = false
+	} else {
+		a.refreshing = false
 	}
 	a.ledgerLoading = false
 	if err != nil {
+		if opts.restoreLedger && a.ready && !a.snap.LedgerMonth.IsZero() {
+			// Keep the title, totals and entries on the same, last good month.
+			a.ledgerMonth = a.snap.LedgerMonth
+		}
 		if !a.ready && a.fatalErr == "" {
 			a.fatalErr = friendlyError(err)
 			return
+		}
+		var refreshErr *refreshError
+		if opts.writing && errors.As(err, &refreshErr) {
+			a.refreshNeeded = true
+			// The mutation is durable. Apply success-side UI cleanup (such
+			// as clearing the form), but never claim that its write failed.
+			if opts.onSuccess != nil {
+				opts.onSuccess()
+			}
+			a.toast = "已保存，但页面刷新失败，请点“刷新账本”"
+			return
+		}
+		if !opts.writing {
+			a.refreshNeeded = true
 		}
 		if opts.onError != nil {
 			opts.onError(err)
@@ -245,40 +339,67 @@ func (a *App) finishTask(seq uint64, snap Snapshot, err error, opts taskOptions)
 // reload reads both the current month and the ledger month. Writes call it
 // after their transaction so the whole window updates from one snapshot.
 func (a *App) reload() {
-	if a.store == nil {
+	if a.closed || a.store == nil {
 		return
 	}
-	current, ledger := a.currentMonth(), a.ledgerMonth
-	a.runTask(func(ctx context.Context) (Snapshot, error) {
-		return a.store.Snapshot(ctx, current, ledger)
-	}, taskOptions{})
+	store, current, ledger := a.store, a.currentMonth(), a.ledgerMonth
+	a.runTask(store, func(ctx context.Context, store Store) (Snapshot, error) {
+		return store.Snapshot(ctx, current, ledger)
+	}, taskOptions{restoreLedger: true})
 }
 
 // mutate runs a transaction on a background goroutine and, in the same
 // task, loads the snapshot that follows it. The onSuccess callback runs on
-// the main thread after the new snapshot is installed.
-func (a *App) mutate(work func(context.Context) error, onSuccess func(), onError func(error)) {
-	if a.store == nil || a.busy {
+// the main thread even if only the refresh failed, because the write itself
+// has already committed and must not be repeated.
+func (a *App) mutate(work func(context.Context, Store) error, onSuccess func(), onError func(error)) {
+	if a.closed || a.store == nil || a.busy {
 		return
 	}
+	store := a.store
 	current, ledger := a.currentMonth(), a.ledgerMonth
-	a.runTask(func(ctx context.Context) (Snapshot, error) {
-		if err := work(ctx); err != nil {
+	a.runTask(store, func(ctx context.Context, store Store) (Snapshot, error) {
+		if err := work(ctx, store); err != nil {
 			return Snapshot{}, err
 		}
-		return a.store.Snapshot(ctx, current, ledger)
+		snap, err := store.Snapshot(ctx, current, ledger)
+		if err != nil {
+			return Snapshot{}, &refreshError{err: err}
+		}
+		return snap, nil
 	}, taskOptions{writing: true, onSuccess: onSuccess, onError: onError})
 }
 
 func (a *App) applySnapshot(snap Snapshot) {
 	a.snap = snap
 	a.ready = true
+	a.refreshNeeded = false
 	a.ledgerLoading = false
 	if !snap.LedgerMonth.IsZero() {
 		a.ledgerMonth = snap.LedgerMonth
 	}
 	a.breakdown = categoryBreakdown(snap.Categories, snap.CurrentStats.ExpenseCents)
 	a.ensureSelectedWallet()
+}
+
+// refreshAtMonthBoundary schedules one redraw at the next month, rather than
+// polling. A changed month is requested once; a failed read leaves the last
+// good snapshot visible and offers the explicit refresh action.
+func (a *App) refreshAtMonthBoundary(c *ui.Context) {
+	if !a.ready || a.closed {
+		return
+	}
+	now := a.now()
+	current := monthStart(now)
+	if until := current.AddDate(0, 1, 0).Sub(now); until > 0 {
+		c.After(until)
+	}
+	if a.busy || a.snap.CurrentMonth.IsZero() || a.snap.CurrentMonth.Equal(current) ||
+		a.monthRefreshTarget.Equal(current) {
+		return
+	}
+	a.monthRefreshTarget = current
+	a.reload()
 }
 
 func (a *App) ensureSelectedWallet() {
@@ -402,8 +523,8 @@ func (a *App) submitEntry(c *ui.Context) {
 		OccurredAt:  a.now(),
 	}
 	a.hint = ""
-	a.mutate(func(ctx context.Context) error {
-		_, err := a.store.AddEntry(ctx, in)
+	a.mutate(func(ctx context.Context, store Store) error {
+		_, err := store.AddEntry(ctx, in)
 		return err
 	}, func() {
 		a.form.amount = ""
@@ -494,8 +615,8 @@ func (a *App) askDeleteEntry(id int64) {
 }
 
 func (a *App) confirmDeleteEntry(entry Entry) {
-	a.mutate(func(ctx context.Context) error {
-		return a.store.DeleteEntry(ctx, entry.ID)
+	a.mutate(func(ctx context.Context, store Store) error {
+		return store.DeleteEntry(ctx, entry.ID)
 	}, func() {
 		a.toast = "已删除这笔记录"
 	}, func(err error) {
@@ -512,8 +633,8 @@ func (a *App) askDeleteWallet(id int64) {
 }
 
 func (a *App) confirmDeleteWallet(id int64) {
-	a.mutate(func(ctx context.Context) error {
-		return a.store.DeleteWallet(ctx, id)
+	a.mutate(func(ctx context.Context, store Store) error {
+		return store.DeleteWallet(ctx, id)
 	}, func() {
 		a.toast = "钱包已删除，相关流水仍保留"
 	}, func(err error) {
@@ -593,8 +714,8 @@ func (a *App) submitModal() {
 			a.toast = "月预算没有变化"
 			return
 		}
-		a.mutate(func(ctx context.Context) error {
-			return a.store.SetBudget(ctx, cents)
+		a.mutate(func(ctx context.Context, store Store) error {
+			return store.SetBudget(ctx, cents)
 		}, func() {
 			a.closeModal()
 			a.toast = "月预算已更新"
@@ -617,8 +738,8 @@ func (a *App) submitModal() {
 			}
 		}
 		var createdID int64
-		a.mutate(func(ctx context.Context) error {
-			w, err := a.store.CreateWallet(ctx, name, initial)
+		a.mutate(func(ctx context.Context, store Store) error {
+			w, err := store.CreateWallet(ctx, name, initial)
 			createdID = w.ID
 			return err
 		}, func() {
@@ -637,8 +758,8 @@ func (a *App) submitModal() {
 			return
 		}
 		target := a.modalTarget
-		a.mutate(func(ctx context.Context) error {
-			return a.store.RenameWallet(ctx, target, name)
+		a.mutate(func(ctx context.Context, store Store) error {
+			return store.RenameWallet(ctx, target, name)
 		}, func() {
 			a.closeModal()
 			a.toast = "名字已更新"
@@ -652,12 +773,18 @@ func (a *App) submitModal() {
 			return
 		}
 		target := a.modalTarget
-		a.mutate(func(ctx context.Context) error {
-			_, err := a.store.CalibrateWallet(ctx, target, targetCents)
+		var difference int64
+		a.mutate(func(ctx context.Context, store Store) error {
+			var err error
+			difference, err = store.CalibrateWallet(ctx, target, targetCents)
 			return err
 		}, func() {
 			a.closeModal()
-			a.toast = "余额已校准，调整差额已记入流水"
+			if difference == 0 {
+				a.toast = "余额没有变化"
+			} else {
+				a.toast = "余额已校准，调整差额已记入流水"
+			}
 		}, func(err error) {
 			a.modalError = friendlyError(err)
 		})
@@ -716,9 +843,10 @@ func friendlyError(err error) string {
 // symbol, so a text field can select and replace it easily.
 func formatPlainCents(cents int64) string {
 	sign := ""
+	whole, frac := cents/centsPerYuan, cents%centsPerYuan
 	if cents < 0 {
 		sign = "-"
-		cents = -cents
+		whole, frac = -whole, -frac
 	}
-	return fmt.Sprintf("%s%d.%02d", sign, cents/centsPerYuan, cents%centsPerYuan)
+	return fmt.Sprintf("%s%d.%02d", sign, whole, frac)
 }

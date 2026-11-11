@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -19,6 +21,62 @@ func openTestStore(t testing.TB) *SQLiteStore {
 	s.now = func() time.Time { return testNow }
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+func TestDatabaseUsesOwnerOnlyPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not available on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "walletfeeder.db")
+	s, err := OpenSQLiteStore(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPrivate := func() {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode().Perm(); got != 0o600 {
+			t.Fatalf("database mode = %04o, want 0600", got)
+		}
+	}
+	assertPrivate()
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenSQLiteStore(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	assertPrivate()
+}
+
+func TestOpenSQLiteStoreRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	realPath := filepath.Join(dir, "real.db")
+	if err := os.WriteFile(realPath, []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linkPath := filepath.Join(dir, "walletfeeder.db")
+	if err := os.Symlink(realPath, linkPath); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := OpenSQLiteStore(context.Background(), linkPath); err == nil {
+		t.Fatal("opening a symlink database should fail")
+	}
+	info, err := os.Stat(realPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("symlink target mode = %04o, should not have been changed", got)
+	}
 }
 
 func TestStoreSeedsDefaultWalletAndBudget(t *testing.T) {

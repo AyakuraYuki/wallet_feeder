@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 func TestMoodBoundaries(t *testing.T) {
 	const budget = int64(100_000) // ¥1,000
@@ -14,6 +17,8 @@ func TestMoodBoundaries(t *testing.T) {
 		{19_999, MoodSlim},
 		{0, MoodSlim},
 		{-1, MoodSlim},
+		{math.MaxInt64, MoodPlump},
+		{math.MaxInt64/2 + 1, MoodPlump},
 	}
 	for _, tt := range tests {
 		if got := MoodFor(tt.balance, budget); got != tt.want {
