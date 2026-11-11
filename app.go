@@ -68,6 +68,7 @@ type App struct {
 
 	page     appPage
 	useGlass bool
+	backdrop *auroraBackdrop
 
 	ready         bool
 	fatalErr      string
